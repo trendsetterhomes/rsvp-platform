@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RSVP Admin</title>
+<link rel="stylesheet" href="/css/admin.css">
+</head>
+<body>
+
+<div id="login-screen" class="login-wrap hidden">
+  <h2>Admin Login</h2>
+  <div id="login-error" class="login-error hidden"></div>
+  <input type="password" id="login-password" placeholder="Admin password" autocomplete="current-password">
+  <button id="login-btn">Log In</button>
+</div>
+
+<div id="app-screen" class="hidden">
+  <div class="top-bar">
+    <h1 id="top-event-name">RSVP Admin</h1>
+    <button id="logout-btn">Log Out</button>
+  </div>
+
+  <div class="container">
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="overview">Overview</button>
+      <button class="tab-btn" data-tab="guests">Guest List</button>
+      <button class="tab-btn" data-tab="upload">Upload Guests</button>
+      <button class="tab-btn" data-tab="settings">Event Settings</button>
+    </div>
+
+    <div id="panel-overview" class="panel active">
+      <div class="stats-row" id="stats-row"></div>
+      <div class="card">
+        <h3>Export Responses</h3>
+        <p class="help-text">Download the full guest list with RSVP status as a CSV file.</p>
+        <button class="action primary" id="export-btn">Download CSV</button>
+      </div>
+    </div>
+
+    <div id="panel-guests" class="panel">
+      <div id="guests-msg"></div>
+      <div class="toolbar">
+        <input type="text" id="guest-search" placeholder="Filter by name…">
+        <select id="status-filter">
+          <option value="">All statuses</option>
+          <option value="yes">Attending</option>
+          <option value="no">Not attending</option>
+          <option value="pending">Not yet responded</option>
+        </select>
+        <div class="spacer"></div>
+        <button class="action primary" id="add-guest-btn">+ Add Guest</button>
+      </div>
+      <div class="card">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th><th>Party</th><th>Contact</th><th>Status</th><th>Attending</th><th>Notes</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="guests-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="panel-upload" class="panel">
+      <div class="card">
+        <h3>Upload Guest List (CSV)</h3>
+        <p class="help-text">
+          Your spreadsheet should have a column for the guest's name (e.g. <code>full_name</code> or <code>name</code>).
+          Optional columns: <code>party_label</code>, <code>max_party_size</code>, <code>email</code>, <code>phone</code>, <code>notes</code>.
+        </p>
+        <div class="upload-drop">
+          <input type="file" id="csv-file" accept=".csv">
+          <div class="help-text">Select a .csv file exported from Excel, Google Sheets, or Numbers.</div>
+        </div>
+        <button class="action primary" id="upload-btn">Upload &amp; Import</button>
+        <button class="action" id="download-template-btn">Download CSV template</button>
+        <div id="upload-msg"></div>
+      </div>
+    </div>
+
+    <div id="panel-settings" class="panel">
+      <div class="card">
+        <h3>Event Details</h3>
+        <div class="field-row">
+          <div><label>Event Name</label><input type="text" id="set-event-name"></div>
+        </div>
+        <div class="field-row">
+          <div><label>Date</label><input type="text" id="set-event-date" placeholder="e.g. Saturday, October 17, 2026"></div>
+          <div><label>Time</label><input type="text" id="set-event-time" placeholder="e.g. 6:00 PM"></div>
+        </div>
+        <div class="field-row">
+          <div><label>Location</label><input type="text" id="set-event-location" placeholder="e.g. The Grand Hall, Austin, TX"></div>
+        </div>
+        <div class="field-row">
+          <div><label>Description</label><textarea id="set-event-description" rows="3"></textarea></div>
+        </div>
+        <div class="field-row">
+          <div><label>RSVP Deadline</label><input type="text" id="set-rsvp-deadline" placeholder="e.g. September 30, 2026"></div>
+          <div><label>Header Image URL (optional)</label><input type="text" id="set-header-image"></div>
+        </div>
+        <div class="field-row">
+          <div style="max-width:160px;"><label>Accent Color</label><input type="color" id="set-accent-color"></div>
+        </div>
+        <button class="action primary" id="save-settings-btn">Save Settings</button>
+        <div id="settings-msg"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="guest-modal" class="modal-backdrop hidden">
+  <div class="modal">
+    <h3 id="modal-title">Add Guest</h3>
+    <div class="field-row"><div><label>Full Name</label><input type="text" id="m-full-name"></div></div>
+    <div class="field-row">
+      <div><label>Party Label</label><input type="text" id="m-party-label" placeholder="e.g. The Smith Family"></div>
+      <div><label>Max Party Size</label><input type="text" id="m-max-party" placeholder="1"></div>
+    </div>
+    <div class="field-row">
+      <div><label>Email</label><input type="text" id="m-email"></div>
+      <div><label>Phone</label><input type="text" id="m-phone"></div>
+    </div>
+    <div class="field-row"><div><label>Notes</label><textarea id="m-notes" rows="2"></textarea></div></div>
+    <div class="modal-actions">
+      <button class="action" id="modal-cancel">Cancel</button>
+      <button class="action primary" id="modal-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<script src="/js/admin.js"></script>
+</body>
+</html>

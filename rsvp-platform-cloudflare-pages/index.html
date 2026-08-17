@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RSVP</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="wrap">
+    <div class="hero" id="hero">
+      <div class="eyebrow">You're Invited</div>
+      <h1 id="event-name">Loading…</h1>
+      <div class="meta" id="event-meta"></div>
+      <div class="desc" id="event-desc"></div>
+    </div>
+
+    <div id="search-view">
+      <div class="section-title">Find Your Invitation</div>
+      <div class="section-sub">Search for your name below to RSVP</div>
+
+      <div class="search-box">
+        <input type="text" id="search-input" placeholder="Type your full name…" autocomplete="off">
+      </div>
+
+      <div id="search-status" class="spinner-inline hidden"></div>
+      <div id="results" class="results hidden"></div>
+      <div id="empty-note" class="empty-note hidden">We couldn't find that name on the guest list. Try just your first or last name, or double‑check the spelling.</div>
+    </div>
+
+    <div id="rsvp-view" class="hidden"></div>
+
+    <div class="footer-note" id="deadline-note"></div>
+  </div>
+
+<script src="/js/app.js"></script>
+</body>
+</html>
