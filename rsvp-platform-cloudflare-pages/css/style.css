@@ -55,6 +55,14 @@ body {
   margin-bottom: 18px;
 }
 
+.hero .meta .meta-line {
+  display: block;
+}
+
+.hero .meta .meta-line.meta-location {
+  margin-top: 4px;
+}
+
 .hero .desc {
   font-size: 16px;
   color: #444;
