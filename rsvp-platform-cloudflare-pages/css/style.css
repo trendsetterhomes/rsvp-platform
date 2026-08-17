@@ -188,6 +188,30 @@ input[type="text"]:focus, input[type="password"]:focus, select:focus, textarea:f
 .choice-btn.selected.yes { border-color: var(--yes); background: #eef5f0; color: var(--yes); }
 .choice-btn.selected.no { border-color: var(--no); background: #f8efed; color: var(--no); }
 
+.party-member {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 18px;
+  margin-bottom: 16px;
+  background: #fdfcf9;
+}
+
+.party-member .rsvp-choices { margin-bottom: 0; }
+.party-member .party-size-field { margin-top: 14px; margin-bottom: 0; }
+
+.party-member-name {
+  font-size: 16px;
+  margin-bottom: 12px;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-weight: 600;
+}
+
+.party-member-hint {
+  font-weight: 400;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .field { margin-bottom: 18px; }
 .field label {
   display: block;
