@@ -2267,23 +2267,53 @@ app.get("/api/search", async (c) => {
   });
   return c.json({ results: matches.slice(0, 15).map(formatGuestPublic) });
 });
-app.post("/api/rsvp", async (c) => {
-  const body = await c.req.json().catch(() => ({}));
-  const { guest_id, status, attending_count, guest_notes } = body || {};
-  if (!guest_id || !["yes", "no"].includes(status)) {
-    return c.json({ error: "guest_id and a valid status (yes/no) are required" }, 400);
-  }
-  const guest = await c.env.DB.prepare("SELECT * FROM guests WHERE id = ?").bind(guest_id).first();
+app.get("/api/party", async (c) => {
+  const guestId = c.req.query("guest_id");
+  if (!guestId) return c.json({ error: "guest_id is required" }, 400);
+  const guest = await c.env.DB.prepare("SELECT * FROM guests WHERE id = ?").bind(guestId).first();
   if (!guest) return c.json({ error: "Guest not found" }, 404);
+  let members = [guest];
+  const label = (guest.party_label || "").trim().toLowerCase();
+  if (label) {
+    const { results: rows } = await c.env.DB.prepare("SELECT * FROM guests").all();
+    members = rows.filter((r) => (r.party_label || "").trim().toLowerCase() === label);
+  }
+  members.sort((a, b) => a.full_name.localeCompare(b.full_name));
+  return c.json({ party_label: guest.party_label || null, members: members.map(formatGuestPublic) });
+});
+async function applyRsvpUpdate(db, { guest_id, status, attending_count, guest_notes }) {
+  if (!guest_id || !["yes", "no"].includes(status)) {
+    return { error: "guest_id and a valid status (yes/no) are required", code: 400 };
+  }
+  const guest = await db.prepare("SELECT * FROM guests WHERE id = ?").bind(guest_id).first();
+  if (!guest) return { error: "Guest not found", code: 404 };
   let count = 0;
   if (status === "yes") {
     count = Math.max(1, Math.min(parseInt(attending_count, 10) || 1, guest.max_party_size));
   }
-  await c.env.DB.prepare(
+  await db.prepare(
     `UPDATE guests SET rsvp_status = ?, attending_count = ?, guest_notes = ?, responded_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`
   ).bind(status, count, String(guest_notes || "").slice(0, 500), guest_id).run();
-  const updated = await c.env.DB.prepare("SELECT * FROM guests WHERE id = ?").bind(guest_id).first();
-  return c.json({ ok: true, guest: formatGuestPublic(updated) });
+  const updated = await db.prepare("SELECT * FROM guests WHERE id = ?").bind(guest_id).first();
+  return { guest: updated };
+}
+app.post("/api/rsvp", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const result = await applyRsvpUpdate(c.env.DB, body || {});
+  if (result.error) return c.json({ error: result.error }, result.code);
+  return c.json({ ok: true, guest: formatGuestPublic(result.guest) });
+});
+app.post("/api/rsvp/party", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const updates = Array.isArray(body?.updates) ? body.updates : [];
+  if (!updates.length) return c.json({ error: "updates array is required" }, 400);
+  const members = [];
+  for (const u of updates) {
+    const result = await applyRsvpUpdate(c.env.DB, u || {});
+    if (result.error) return c.json({ error: result.error }, result.code);
+    members.push(formatGuestPublic(result.guest));
+  }
+  return c.json({ ok: true, members });
 });
 app.post("/api/admin/login", async (c) => {
   const body = await c.req.json().catch(() => ({}));
@@ -2479,3 +2509,622 @@ var onRequest = handle(app);
 export {
   onRequest
 };
+
+(function () {
+  const searchInput = document.getElementById('search-input');
+  const resultsEl = document.getElementById('results');
+  const emptyNoteEl = document.getElementById('empty-note');
+  const searchStatusEl = document.getElementById('search-status');
+  const searchView = document.getElementById('search-view');
+  const rsvpView = document.getElementById('rsvp-view');
+  const deadlineNote = document.getElementById('deadline-note');
+
+  let debounceTimer = null;
+  let currentMembers = [];       // everyone in the party being responded for (length 1 if no party)
+  let currentPartyLabel = null;
+  let memberState = {};          // guest id -> { status: 'yes'|'no'|null, count: number }
+
+  function escapeHtml(str) {
+    return String(str || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  async function loadEvent() {
+    try {
+      const res = await fetch('/api/event');
+      const data = await res.json();
+      document.getElementById('event-name').textContent = data.event_name || 'Our Event';
+
+      const metaParts = [data.event_date, data.event_time, data.event_location].filter(Boolean);
+      document.getElementById('event-meta').textContent = metaParts.join(' · ');
+      document.getElementById('event-desc').textContent = data.event_description || '';
+
+      if (data.header_image_url) {
+        const img = document.createElement('img');
+        img.src = data.header_image_url;
+        img.className = 'header-image';
+        img.alt = data.event_name || 'Event';
+        document.getElementById('hero').insertBefore(img, document.querySelector('.eyebrow'));
+      }
+
+      if (data.accent_color) {
+        document.documentElement.style.setProperty('--accent', data.accent_color);
+      }
+
+      if (data.rsvp_deadline) {
+        deadlineNote.textContent = `Please RSVP by ${data.rsvp_deadline}`;
+      }
+
+      document.title = (data.event_name || 'RSVP') + ' — RSVP';
+    } catch (e) {
+      document.getElementById('event-name').textContent = 'RSVP';
+    }
+  }
+
+  function renderResults(results) {
+    if (!results.length) {
+      resultsEl.classList.add('hidden');
+      emptyNoteEl.classList.remove('hidden');
+      return;
+    }
+    emptyNoteEl.classList.add('hidden');
+    resultsEl.classList.remove('hidden');
+    resultsEl.innerHTML = results.map(r => `
+      <div class="result-item" data-id="${r.id}">
+        <div>
+          <div class="name">${escapeHtml(r.full_name)}</div>
+        </div>
+        <div class="status-pill ${r.rsvp_status}">${r.rsvp_status === 'yes' ? 'Attending' : r.rsvp_status === 'no' ? 'Not attending' : 'Not yet responded'}</div>
+      </div>
+    `).join('');
+
+    resultsEl.querySelectorAll('.result-item').forEach(el => {
+      el.addEventListener('click', () => {
+        const guest = results.find(r => String(r.id) === el.dataset.id);
+        openRsvp(guest);
+      });
+    });
+  }
+
+  async function doSearch(q) {
+    if (!q || q.trim().length < 2) {
+      resultsEl.classList.add('hidden');
+      emptyNoteEl.classList.add('hidden');
+      searchStatusEl.classList.add('hidden');
+      return;
+    }
+    searchStatusEl.textContent = 'Searching…';
+    searchStatusEl.classList.remove('hidden');
+    try {
+      const res = await fetch('/api/search?q=' + encodeURIComponent(q));
+      const data = await res.json();
+      searchStatusEl.classList.add('hidden');
+      renderResults(data.results || []);
+    } catch (e) {
+      searchStatusEl.textContent = 'Something went wrong. Please try again.';
+    }
+  }
+
+  searchInput.addEventListener('input', (e) => {
+    clearTimeout(debounceTimer);
+    const q = e.target.value;
+    debounceTimer = setTimeout(() => doSearch(q), 250);
+  });
+
+  async function openRsvp(guest) {
+    searchView.classList.add('hidden');
+    rsvpView.classList.remove('hidden');
+    rsvpView.innerHTML = `<div class="card"><div class="spinner-inline">Loading…</div></div>`;
+
+    let members = [guest];
+    let partyLabel = guest.party_label || null;
+    try {
+      const res = await fetch('/api/party?guest_id=' + encodeURIComponent(guest.id));
+      const data = await res.json();
+      if (res.ok && Array.isArray(data.members) && data.members.length) {
+        members = data.members;
+        partyLabel = data.party_label || null;
+      }
+    } catch (e) {
+      // fall back to just the one guest found via search
+    }
+
+    setMembers(members, partyLabel);
+    renderRsvpForm();
+  }
+
+  function setMembers(members, partyLabel) {
+    currentMembers = members;
+    currentPartyLabel = partyLabel;
+    memberState = {};
+    members.forEach(m => {
+      memberState[m.id] = {
+        status: m.rsvp_status === 'yes' || m.rsvp_status === 'no' ? m.rsvp_status : null,
+        count: m.attending_count || 1,
+      };
+    });
+  }
+
+  function renderRsvpForm() {
+    const isParty = currentMembers.length > 1;
+    const titleText = isParty ? (currentPartyLabel || 'Your Party') : currentMembers[0].full_name;
+
+    const memberBlocks = currentMembers.map(m => {
+      const st = memberState[m.id];
+      const showPartySize = m.max_party_size > 1 && st.status === 'yes';
+      const partyOptions = Array.from({ length: m.max_party_size }, (_, i) => i + 1)
+        .map(n => `<option value="${n}" ${st.count === n ? 'selected' : ''}>${n} ${n === 1 ? 'guest' : 'guests'}</option>`).join('');
+
+      return `
+        <div class="party-member" data-member-id="${m.id}">
+          <div class="party-member-name">${escapeHtml(m.full_name)}${m.max_party_size > 1 ? ` <span class="party-member-hint">(up to ${m.max_party_size})</span>` : ''}</div>
+          <div class="rsvp-choices">
+            <button type="button" class="choice-btn yes ${st.status === 'yes' ? 'selected' : ''}" data-action="yes">${isParty ? 'Attending' : 'Joyfully Accepts'}</button>
+            <button type="button" class="choice-btn no ${st.status === 'no' ? 'selected' : ''}" data-action="no">${isParty ? 'Not Attending' : 'Regretfully Declines'}</button>
+          </div>
+          <div class="field party-size-field ${showPartySize ? '' : 'hidden'}">
+            <label>Number attending</label>
+            <select class="party-size-select">${partyOptions}</select>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    const sharedNotes = currentMembers[0].guest_notes || '';
+
+    rsvpView.innerHTML = `
+      <div class="card">
+        <h2>${escapeHtml(titleText)}</h2>
+        ${isParty ? `<div class="party-label">Respond for everyone in your party below.</div>` : ''}
+
+        ${memberBlocks}
+
+        <div class="field">
+          <label for="guest-notes">Message (optional)</label>
+          <textarea id="guest-notes" placeholder="Dietary restrictions, well wishes, etc.">${escapeHtml(sharedNotes)}</textarea>
+        </div>
+
+        <button class="btn-primary" id="submit-rsvp" disabled>${isParty ? 'Submit RSVP for ' + escapeHtml(titleText) : 'Submit RSVP'}</button>
+        <button class="btn-secondary" id="back-btn">← Search again</button>
+      </div>
+    `;
+
+    rsvpView.querySelectorAll('.party-member').forEach(el => {
+      const id = el.dataset.memberId;
+      el.querySelector('[data-action="yes"]').addEventListener('click', () => selectMemberStatus(id, 'yes'));
+      el.querySelector('[data-action="no"]').addEventListener('click', () => selectMemberStatus(id, 'no'));
+      const sizeSelect = el.querySelector('.party-size-select');
+      if (sizeSelect) {
+        sizeSelect.addEventListener('change', (e) => { memberState[id].count = parseInt(e.target.value, 10); });
+      }
+    });
+
+    document.getElementById('submit-rsvp').addEventListener('click', submitRsvp);
+    document.getElementById('back-btn').addEventListener('click', goBackToSearch);
+    updateSubmitState();
+  }
+
+  function selectMemberStatus(id, status) {
+    memberState[id].status = status;
+    renderRsvpForm();
+  }
+
+  function updateSubmitState() {
+    const btn = document.getElementById('submit-rsvp');
+    if (!btn) return;
+    const allSet = currentMembers.every(m => memberState[m.id].status);
+    btn.disabled = !allSet;
+  }
+
+  function goBackToSearch() {
+    rsvpView.classList.add('hidden');
+    searchView.classList.remove('hidden');
+    searchInput.value = '';
+    resultsEl.classList.add('hidden');
+    emptyNoteEl.classList.add('hidden');
+    currentMembers = [];
+    currentPartyLabel = null;
+    memberState = {};
+  }
+
+  async function submitRsvp() {
+    const btn = document.getElementById('submit-rsvp');
+    const originalLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Submitting…';
+
+    const notesEl = document.getElementById('guest-notes');
+    const noteValue = notesEl ? notesEl.value : '';
+
+    const updates = currentMembers.map(m => ({
+      guest_id: m.id,
+      status: memberState[m.id].status,
+      attending_count: memberState[m.id].count,
+      guest_notes: noteValue,
+    }));
+
+    try {
+      let resultMembers;
+      if (updates.length === 1) {
+        const res = await fetch('/api/rsvp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updates[0]),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Something went wrong');
+        resultMembers = [data.guest];
+      } else {
+        const res = await fetch('/api/rsvp/party', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ updates }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Something went wrong');
+        resultMembers = data.members;
+      }
+      setMembers(resultMembers, currentPartyLabel);
+      renderConfirmation(resultMembers);
+    } catch (e) {
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+      alert(e.message || 'Something went wrong. Please try again.');
+    }
+  }
+
+  function renderConfirmation(members) {
+    const allYes = members.every(m => m.rsvp_status === 'yes');
+    const allNo = members.every(m => m.rsvp_status === 'no');
+    const icon = allYes ? '🎉' : allNo ? '💌' : '📋';
+
+    let heading;
+    let summary;
+    if (members.length === 1) {
+      const yes = members[0].rsvp_status === 'yes';
+      heading = yes ? "You're on the list!" : 'Thanks for letting us know';
+      summary = yes ? 'We can’t wait to celebrate with you.' : 'We’ll miss you, but thank you for responding.';
+    } else {
+      heading = 'Thanks — your party’s response is in!';
+      summary = members.map(m => `${escapeHtml(m.full_name)}: ${m.rsvp_status === 'yes' ? 'Attending' : 'Not attending'}`).join(' · ');
+    }
+
+    rsvpView.innerHTML = `
+      <div class="card confirmation">
+        <div class="icon">${icon}</div>
+        <h2>${heading}</h2>
+        <p>${summary}</p>
+        <button class="btn-secondary" id="edit-again">Made a mistake? Update your response</button>
+      </div>
+    `;
+    document.getElementById('edit-again').addEventListener('click', () => renderRsvpForm());
+  }
+
+  loadEvent();
+})();
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RSVP</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="wrap">
+    <div class="hero" id="hero">
+      <div class="eyebrow">You're Invited</div>
+      <h1 id="event-name">Loading…</h1>
+      <div class="meta" id="event-meta"></div>
+      <div class="desc" id="event-desc"></div>
+    </div>
+
+    <div id="search-view">
+      <div class="section-title">Find Your Invitation</div>
+      <div class="section-sub">Search for your name below to RSVP</div>
+
+      <div class="search-box">
+        <input type="text" id="search-input" placeholder="Type your name…" autocomplete="off">
+      </div>
+
+      <div id="search-status" class="spinner-inline hidden"></div>
+      <div id="results" class="results hidden"></div>
+      <div id="empty-note" class="empty-note hidden">We couldn't find that name on the guest list. Try just your first or last name, or double‑check the spelling.</div>
+    </div>
+
+    <div id="rsvp-view" class="hidden"></div>
+
+    <div class="footer-note" id="deadline-note"></div>
+  </div>
+
+<script src="/js/app.js"></script>
+</body>
+</html>
+
+:root {
+  --accent: #8a6d3b;
+  --accent-dark: #6b5329;
+  --ink: #2b2620;
+  --paper: #fdfbf7;
+  --line: #e6ddcb;
+  --muted: #7a6f5e;
+  --yes: #3f6b4f;
+  --no: #9a4a3f;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: 'Georgia', 'Iowan Old Style', 'Times New Roman', serif;
+  background: var(--paper);
+  color: var(--ink);
+  line-height: 1.55;
+}
+
+.wrap {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 0 20px 80px;
+}
+
+.hero {
+  text-align: center;
+  padding: 64px 20px 40px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 40px;
+}
+
+.hero .eyebrow {
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-size: 12px;
+  color: var(--accent);
+  margin-bottom: 14px;
+}
+
+.hero h1 {
+  font-size: 40px;
+  margin: 0 0 14px;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+}
+
+.hero .meta {
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 15px;
+  color: var(--muted);
+  margin-bottom: 18px;
+}
+
+.hero .desc {
+  font-size: 16px;
+  color: #444;
+  max-width: 480px;
+  margin: 0 auto;
+}
+
+.hero img.header-image {
+  max-width: 100%;
+  border-radius: 6px;
+  margin-bottom: 24px;
+}
+
+.section-title {
+  font-size: 22px;
+  text-align: center;
+  margin: 0 0 6px;
+  font-weight: 400;
+}
+
+.section-sub {
+  text-align: center;
+  color: var(--muted);
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 14px;
+  margin-bottom: 28px;
+}
+
+.search-box {
+  position: relative;
+  margin-bottom: 12px;
+}
+
+input[type="text"], input[type="password"], select, textarea {
+  width: 100%;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+}
+
+input[type="text"]:focus, input[type="password"]:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(138, 109, 59, 0.12);
+}
+
+.results {
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.result-item {
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+}
+
+.result-item:last-child { border-bottom: none; }
+.result-item:hover { background: #faf6ec; }
+
+.result-item .name { font-size: 16px; }
+.result-item .status-pill { font-size: 11px; padding: 4px 10px; border-radius: 100px; text-transform: uppercase; letter-spacing: 0.05em; }
+.status-pill.yes { background: #e6f0e9; color: var(--yes); }
+.status-pill.no { background: #f4e6e3; color: var(--no); }
+.status-pill.pending { background: #f1ede2; color: var(--muted); }
+
+.empty-note {
+  text-align: center;
+  color: var(--muted);
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 14px;
+  margin-top: 16px;
+}
+
+.card {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 28px;
+  margin-top: 20px;
+}
+
+.card h2 {
+  font-weight: 400;
+  font-size: 24px;
+  margin: 0 0 4px;
+  text-align: center;
+}
+
+.card .party-label {
+  text-align: center;
+  color: var(--muted);
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 13px;
+  margin-bottom: 22px;
+}
+
+.rsvp-choices {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.choice-btn {
+  flex: 1;
+  padding: 16px;
+  border: 2px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  text-align: center;
+  color: var(--ink);
+  transition: all 0.15s ease;
+}
+
+.choice-btn.selected.yes { border-color: var(--yes); background: #eef5f0; color: var(--yes); }
+.choice-btn.selected.no { border-color: var(--no); background: #f8efed; color: var(--no); }
+
+.party-member {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 18px;
+  margin-bottom: 16px;
+  background: #fdfcf9;
+}
+
+.party-member .rsvp-choices { margin-bottom: 0; }
+.party-member .party-size-field { margin-top: 14px; margin-bottom: 0; }
+
+.party-member-name {
+  font-size: 16px;
+  margin-bottom: 12px;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-weight: 600;
+}
+
+.party-member-hint {
+  font-weight: 400;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.field { margin-bottom: 18px; }
+.field label {
+  display: block;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+textarea { resize: vertical; min-height: 70px; font-family: inherit; }
+
+.btn-primary {
+  width: 100%;
+  padding: 15px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+}
+
+.btn-primary:hover { background: var(--accent-dark); }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-secondary {
+  width: 100%;
+  padding: 13px;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 14px;
+  cursor: pointer;
+  margin-top: 10px;
+}
+
+.confirmation {
+  text-align: center;
+  padding: 20px 10px;
+}
+
+.confirmation .icon {
+  font-size: 42px;
+  margin-bottom: 10px;
+}
+
+.confirmation h2 { margin-bottom: 8px; }
+.confirmation p { color: var(--muted); font-family: 'Helvetica Neue', Arial, sans-serif; font-size: 15px; }
+
+.footer-note {
+  text-align: center;
+  margin-top: 50px;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.hidden { display: none !important; }
+
+.spinner-inline {
+  text-align: center;
+  color: var(--muted);
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 14px;
+  padding: 10px;
+}
