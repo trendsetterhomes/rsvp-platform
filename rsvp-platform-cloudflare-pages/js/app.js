@@ -22,8 +22,11 @@
       const data = await res.json();
       document.getElementById('event-name').textContent = data.event_name || 'Our Event';
 
-      const metaParts = [data.event_date, data.event_time, data.event_location].filter(Boolean);
-      document.getElementById('event-meta').textContent = metaParts.join(' · ');
+      const dateTimeParts = [data.event_date, data.event_time].filter(Boolean);
+      const metaLines = [];
+      if (dateTimeParts.length) metaLines.push(`<span class="meta-line">${escapeHtml(dateTimeParts.join(' · '))}</span>`);
+      if (data.event_location) metaLines.push(`<span class="meta-line meta-location">${escapeHtml(data.event_location)}</span>`);
+      document.getElementById('event-meta').innerHTML = metaLines.join('');
       document.getElementById('event-desc').textContent = data.event_description || '';
 
       if (data.header_image_url) {
