@@ -8,8 +8,9 @@
   const deadlineNote = document.getElementById('deadline-note');
 
   let debounceTimer = null;
-  let currentGuest = null;
-  let selectedStatus = null;
+  let currentMembers = [];       // everyone in the party being responded for (length 1 if no party)
+  let currentPartyLabel = null;
+  let memberState = {};          // guest id -> { status: 'yes'|'no'|null, count: number }
 
   function escapeHtml(str) {
     return String(str || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -97,60 +98,109 @@
     debounceTimer = setTimeout(() => doSearch(q), 250);
   });
 
-  function openRsvp(guest) {
-    currentGuest = guest;
-    selectedStatus = guest.rsvp_status === 'yes' || guest.rsvp_status === 'no' ? guest.rsvp_status : null;
+  async function openRsvp(guest) {
     searchView.classList.add('hidden');
     rsvpView.classList.remove('hidden');
+    rsvpView.innerHTML = `<div class="card"><div class="spinner-inline">Loading…</div></div>`;
+
+    let members = [guest];
+    let partyLabel = guest.party_label || null;
+    try {
+      const res = await fetch('/api/party?guest_id=' + encodeURIComponent(guest.id));
+      const data = await res.json();
+      if (res.ok && Array.isArray(data.members) && data.members.length) {
+        members = data.members;
+        partyLabel = data.party_label || null;
+      }
+    } catch (e) {
+      // fall back to just the one guest found via search
+    }
+
+    setMembers(members, partyLabel);
     renderRsvpForm();
   }
 
+  function setMembers(members, partyLabel) {
+    currentMembers = members;
+    currentPartyLabel = partyLabel;
+    memberState = {};
+    members.forEach(m => {
+      memberState[m.id] = {
+        status: m.rsvp_status === 'yes' || m.rsvp_status === 'no' ? m.rsvp_status : null,
+        count: m.attending_count || 1,
+      };
+    });
+  }
+
   function renderRsvpForm() {
-    const g = currentGuest;
-    const showPartySize = g.max_party_size > 1;
-    const partyOptions = Array.from({ length: g.max_party_size }, (_, i) => i + 1)
-      .map(n => `<option value="${n}" ${g.attending_count === n ? 'selected' : ''}>${n} ${n === 1 ? 'guest' : 'guests'}</option>`).join('');
+    const isParty = currentMembers.length > 1;
+    const titleText = isParty ? (currentPartyLabel || 'Your Party') : currentMembers[0].full_name;
+
+    const memberBlocks = currentMembers.map(m => {
+      const st = memberState[m.id];
+      const showPartySize = m.max_party_size > 1 && st.status === 'yes';
+      const partyOptions = Array.from({ length: m.max_party_size }, (_, i) => i + 1)
+        .map(n => `<option value="${n}" ${st.count === n ? 'selected' : ''}>${n} ${n === 1 ? 'guest' : 'guests'}</option>`).join('');
+
+      return `
+        <div class="party-member" data-member-id="${m.id}">
+          <div class="party-member-name">${escapeHtml(m.full_name)}${m.max_party_size > 1 ? ` <span class="party-member-hint">(up to ${m.max_party_size})</span>` : ''}</div>
+          <div class="rsvp-choices">
+            <button type="button" class="choice-btn yes ${st.status === 'yes' ? 'selected' : ''}" data-action="yes">${isParty ? 'Attending' : 'Joyfully Accepts'}</button>
+            <button type="button" class="choice-btn no ${st.status === 'no' ? 'selected' : ''}" data-action="no">${isParty ? 'Not Attending' : 'Regretfully Declines'}</button>
+          </div>
+          <div class="field party-size-field ${showPartySize ? '' : 'hidden'}">
+            <label>Number attending</label>
+            <select class="party-size-select">${partyOptions}</select>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    const sharedNotes = currentMembers[0].guest_notes || '';
 
     rsvpView.innerHTML = `
       <div class="card">
-        <h2>${escapeHtml(g.full_name)}</h2>
-        ${g.party_label ? `<div class="party-label">${escapeHtml(g.party_label)} · up to ${g.max_party_size} ${g.max_party_size === 1 ? 'guest' : 'guests'}</div>` : (g.max_party_size > 1 ? `<div class="party-label">Party of up to ${g.max_party_size}</div>` : '')}
+        <h2>${escapeHtml(titleText)}</h2>
+        ${isParty ? `<div class="party-label">Respond for everyone in your party below.</div>` : ''}
 
-        <div class="rsvp-choices">
-          <button type="button" class="choice-btn yes ${selectedStatus === 'yes' ? 'selected' : ''}" id="btn-yes">Joyfully Accepts</button>
-          <button type="button" class="choice-btn no ${selectedStatus === 'no' ? 'selected' : ''}" id="btn-no">Regretfully Declines</button>
-        </div>
-
-        <div id="party-field" class="field ${showPartySize && selectedStatus === 'yes' ? '' : 'hidden'}">
-          <label for="party-size">Number attending</label>
-          <select id="party-size">${partyOptions}</select>
-        </div>
+        ${memberBlocks}
 
         <div class="field">
           <label for="guest-notes">Message (optional)</label>
-          <textarea id="guest-notes" placeholder="Dietary restrictions, well wishes, etc.">${escapeHtml(g.guest_notes || '')}</textarea>
+          <textarea id="guest-notes" placeholder="Dietary restrictions, well wishes, etc.">${escapeHtml(sharedNotes)}</textarea>
         </div>
 
-        <button class="btn-primary" id="submit-rsvp" disabled>Submit RSVP</button>
+        <button class="btn-primary" id="submit-rsvp" disabled>${isParty ? 'Submit RSVP for ' + escapeHtml(titleText) : 'Submit RSVP'}</button>
         <button class="btn-secondary" id="back-btn">← Search again</button>
       </div>
     `;
 
-    document.getElementById('btn-yes').addEventListener('click', () => selectStatus('yes'));
-    document.getElementById('btn-no').addEventListener('click', () => selectStatus('no'));
+    rsvpView.querySelectorAll('.party-member').forEach(el => {
+      const id = el.dataset.memberId;
+      el.querySelector('[data-action="yes"]').addEventListener('click', () => selectMemberStatus(id, 'yes'));
+      el.querySelector('[data-action="no"]').addEventListener('click', () => selectMemberStatus(id, 'no'));
+      const sizeSelect = el.querySelector('.party-size-select');
+      if (sizeSelect) {
+        sizeSelect.addEventListener('change', (e) => { memberState[id].count = parseInt(e.target.value, 10); });
+      }
+    });
+
     document.getElementById('submit-rsvp').addEventListener('click', submitRsvp);
     document.getElementById('back-btn').addEventListener('click', goBackToSearch);
     updateSubmitState();
   }
 
-  function selectStatus(status) {
-    selectedStatus = status;
+  function selectMemberStatus(id, status) {
+    memberState[id].status = status;
     renderRsvpForm();
   }
 
   function updateSubmitState() {
     const btn = document.getElementById('submit-rsvp');
-    if (btn) btn.disabled = !selectedStatus;
+    if (!btn) return;
+    const allSet = currentMembers.every(m => memberState[m.id].status);
+    btn.disabled = !allSet;
   }
 
   function goBackToSearch() {
@@ -159,57 +209,83 @@
     searchInput.value = '';
     resultsEl.classList.add('hidden');
     emptyNoteEl.classList.add('hidden');
-    currentGuest = null;
-    selectedStatus = null;
+    currentMembers = [];
+    currentPartyLabel = null;
+    memberState = {};
   }
 
   async function submitRsvp() {
     const btn = document.getElementById('submit-rsvp');
+    const originalLabel = btn.textContent;
     btn.disabled = true;
     btn.textContent = 'Submitting…';
 
-    const partySizeEl = document.getElementById('party-size');
     const notesEl = document.getElementById('guest-notes');
+    const noteValue = notesEl ? notesEl.value : '';
+
+    const updates = currentMembers.map(m => ({
+      guest_id: m.id,
+      status: memberState[m.id].status,
+      attending_count: memberState[m.id].count,
+      guest_notes: noteValue,
+    }));
 
     try {
-      const res = await fetch('/api/rsvp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          guest_id: currentGuest.id,
-          status: selectedStatus,
-          attending_count: partySizeEl ? parseInt(partySizeEl.value, 10) : 1,
-          guest_notes: notesEl ? notesEl.value : '',
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Something went wrong');
-      renderConfirmation(selectedStatus);
+      let resultMembers;
+      if (updates.length === 1) {
+        const res = await fetch('/api/rsvp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updates[0]),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Something went wrong');
+        resultMembers = [data.guest];
+      } else {
+        const res = await fetch('/api/rsvp/party', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ updates }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Something went wrong');
+        resultMembers = data.members;
+      }
+      setMembers(resultMembers, currentPartyLabel);
+      renderConfirmation(resultMembers);
     } catch (e) {
       btn.disabled = false;
-      btn.textContent = 'Submit RSVP';
+      btn.textContent = originalLabel;
       alert(e.message || 'Something went wrong. Please try again.');
     }
   }
 
-  function renderConfirmation(status) {
+  function renderConfirmation(members) {
+    const allYes = members.every(m => m.rsvp_status === 'yes');
+    const allNo = members.every(m => m.rsvp_status === 'no');
+    const icon = allYes ? '🎉' : allNo ? '💌' : '📋';
+
+    let heading;
+    let summary;
+    if (members.length === 1) {
+      const yes = members[0].rsvp_status === 'yes';
+      heading = yes ? "You're on the list!" : 'Thanks for letting us know';
+      summary = yes ? 'We can’t wait to celebrate with you.' : 'We’ll miss you, but thank you for responding.';
+    } else {
+      heading = 'Thanks — your party’s response is in!';
+      summary = members.map(m => `${escapeHtml(m.full_name)}: ${m.rsvp_status === 'yes' ? 'Attending' : 'Not attending'}`).join(' · ');
+    }
+
     rsvpView.innerHTML = `
       <div class="card confirmation">
-        <div class="icon">${status === 'yes' ? '🎉' : '💌'}</div>
-        <h2>${status === 'yes' ? "You're on the list!" : 'Thanks for letting us know'}</h2>
-        <p>${status === 'yes' ? 'We can\'t wait to celebrate with you.' : 'We\'ll miss you, but thank you for responding.'}</p>
+        <div class="icon">${icon}</div>
+        <h2>${heading}</h2>
+        <p>${summary}</p>
         <button class="btn-secondary" id="edit-again">Made a mistake? Update your response</button>
       </div>
     `;
     document.getElementById('edit-again').addEventListener('click', () => renderRsvpForm());
   }
-
-  // Wire party size visibility toggle whenever the choice changes
-  document.addEventListener('change', (e) => {
-    if (e.target && e.target.id === 'party-size' && currentGuest) {
-      currentGuest.attending_count = parseInt(e.target.value, 10);
-    }
-  });
 
   loadEvent();
 })();
