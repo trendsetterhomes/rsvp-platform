@@ -96,7 +96,7 @@ body {
   margin-bottom: 12px;
 }
 
-input[type="text"], input[type="password"], select, textarea {
+input[type="text"], input[type="password"], input[type="email"], select, textarea {
   width: 100%;
   font-family: 'Helvetica Neue', Arial, sans-serif;
   font-size: 16px;
@@ -107,7 +107,7 @@ input[type="text"], input[type="password"], select, textarea {
   color: var(--ink);
 }
 
-input[type="text"]:focus, input[type="password"]:focus, select:focus, textarea:focus {
+input[type="text"]:focus, input[type="password"]:focus, input[type="email"]:focus, select:focus, textarea:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(138, 109, 59, 0.12);
