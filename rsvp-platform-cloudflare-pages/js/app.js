@@ -160,6 +160,7 @@
     }).join('');
 
     const sharedNotes = currentMembers[0].guest_notes || '';
+    const knownEmail = currentMembers.find(m => m.email)?.email || '';
 
     rsvpView.innerHTML = `
       <div class="card">
@@ -167,6 +168,11 @@
         ${isParty ? `<div class="party-label">Respond for everyone in your party below.</div>` : ''}
 
         ${memberBlocks}
+
+        <div class="field">
+          <label for="guest-email">Email (optional)</label>
+          <input type="email" id="guest-email" placeholder="you@example.com" value="${escapeHtml(knownEmail)}">
+        </div>
 
         <div class="field">
           <label for="guest-notes">Message (optional)</label>
@@ -224,12 +230,15 @@
 
     const notesEl = document.getElementById('guest-notes');
     const noteValue = notesEl ? notesEl.value : '';
+    const emailEl = document.getElementById('guest-email');
+    const emailValue = emailEl ? emailEl.value.trim() : '';
 
     const updates = currentMembers.map(m => ({
       guest_id: m.id,
       status: memberState[m.id].status,
       attending_count: memberState[m.id].count,
       guest_notes: noteValue,
+      email: emailValue,
     }));
 
     try {
