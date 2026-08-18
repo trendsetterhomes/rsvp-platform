@@ -64,7 +64,6 @@
         <div>
           <div class="name">${escapeHtml(r.full_name)}</div>
         </div>
-        <div class="status-pill ${r.rsvp_status}">${r.rsvp_status === 'yes' ? 'Attending' : r.rsvp_status === 'no' ? 'Not attending' : 'Not yet responded'}</div>
       </div>
     `).join('');
 
