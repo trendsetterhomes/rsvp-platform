@@ -2245,6 +2245,12 @@ function formatGuestPublic(g) {
     guest_notes: g.guest_notes
   };
 }
+function formatGuestSearchResult(g) {
+  return {
+    id: g.id,
+    full_name: g.full_name
+  };
+}
 async function requireAdmin(c, next) {
   const ok = await isValidSession(c.req.header("Cookie"), c.env.SESSION_SECRET);
   if (!ok) return c.json({ error: "Not authenticated" }, 401);
@@ -2265,7 +2271,7 @@ app.get("/api/search", async (c) => {
     const score = (r) => r.search_name === q ? 0 : r.search_name.startsWith(q) ? 1 : 2;
     return score(a) - score(b);
   });
-  return c.json({ results: matches.slice(0, 15).map(formatGuestPublic) });
+  return c.json({ results: matches.slice(0, 15).map(formatGuestSearchResult) });
 });
 app.get("/api/party", async (c) => {
   const guestId = c.req.query("guest_id");
