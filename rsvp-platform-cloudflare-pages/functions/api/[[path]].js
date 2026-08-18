@@ -2242,9 +2242,11 @@ function formatGuestPublic(g) {
     max_party_size: g.max_party_size,
     rsvp_status: g.rsvp_status,
     attending_count: g.attending_count,
-    guest_notes: g.guest_notes
+    guest_notes: g.guest_notes,
+    email: g.email
   };
 }
+var EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 function formatGuestSearchResult(g) {
   return {
     id: g.id,
@@ -2287,19 +2289,23 @@ app.get("/api/party", async (c) => {
   members.sort((a, b) => a.full_name.localeCompare(b.full_name));
   return c.json({ party_label: guest.party_label || null, members: members.map(formatGuestPublic) });
 });
-async function applyRsvpUpdate(db, { guest_id, status, attending_count, guest_notes }) {
+async function applyRsvpUpdate(db, { guest_id, status, attending_count, guest_notes, email }) {
   if (!guest_id || !["yes", "no"].includes(status)) {
     return { error: "guest_id and a valid status (yes/no) are required", code: 400 };
   }
   const guest = await db.prepare("SELECT * FROM guests WHERE id = ?").bind(guest_id).first();
   if (!guest) return { error: "Guest not found", code: 404 };
+  const emailTrimmed = String(email || "").trim();
+  if (emailTrimmed && !EMAIL_RE.test(emailTrimmed)) {
+    return { error: "Please enter a valid email address, or leave it blank.", code: 400 };
+  }
   let count = 0;
   if (status === "yes") {
     count = Math.max(1, Math.min(parseInt(attending_count, 10) || 1, guest.max_party_size));
   }
   await db.prepare(
-    `UPDATE guests SET rsvp_status = ?, attending_count = ?, guest_notes = ?, responded_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`
-  ).bind(status, count, String(guest_notes || "").slice(0, 500), guest_id).run();
+    `UPDATE guests SET rsvp_status = ?, attending_count = ?, guest_notes = ?, email = COALESCE(NULLIF(?, ''), email), responded_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`
+  ).bind(status, count, String(guest_notes || "").slice(0, 500), emailTrimmed, guest_id).run();
   const updated = await db.prepare("SELECT * FROM guests WHERE id = ?").bind(guest_id).first();
   return { guest: updated };
 }
